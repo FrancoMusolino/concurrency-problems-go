@@ -1,14 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"math/rand"
-	"sync"
 	"time"
+
+	"github.com/fatih/color"
 )
 
-const NUMBER_OF_BARBERS = 2
-const WAITING_ROOM_SIZE = 4
+var numberOfBarbers = 3
+var waitingRoomSize = 4
+var shopsOpeningTime = 20 * time.Second
 
 var names = []string{
 	"Juan", "Pedro", "Lucía", "María", "Carlos",
@@ -29,103 +30,41 @@ var names = []string{
 // if the barber is busy, the client waits on the waiting room
 // Once the shop closes, no more clients ara allowed, but the barber has to stay until everyone gets a hair cut
 
-// Barber shop
-type BarberShop struct {
-	name    string
-	barbers []Barber
-	isOpen  bool
-	ch      chan Client
-	mu      *sync.Mutex
-}
-
-func (bs *BarberShop) Close() {
-	bs.mu.Lock()
-	bs.isOpen = false
-	bs.mu.Unlock()
-
-	close(bs.ch)
-}
-
-func (bs *BarberShop) IsClose() bool {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	return !bs.isOpen
-}
-
-// Barbers
-type Barber struct {
-	name string
-}
-
-// Client
-type Client struct {
-	name string
-}
-
-func barberWork(b *Barber, ch <-chan Client, wg *sync.WaitGroup) {
-	for {
-		c, ok := <-ch
-		if !ok {
-			return
-		}
-
-		delay := rand.Intn(5) + 1
-
-		fmt.Printf("\t\tBarber %s doing haircut to client %s. Delay of %d seconds\n", b.name, c.name, delay)
-		time.Sleep(time.Duration(delay) * time.Second)
-		wg.Done()
-	}
-}
-
 func main() {
-	wg := sync.WaitGroup{}
-	barberShop := initBarberShop()
-	fmt.Printf("%s is open!!\n", barberShop.name)
+	shop := NewShop()
+	color.Cyan("%s is open!!", shop.name)
+
+	shopIsClosingChan := make(chan bool)
+	shopClosedChan := make(chan bool)
 
 	go func() {
-		time.Sleep(20 * time.Second)
-		fmt.Printf("Closing %s, no more client are allowed\n", barberShop.name)
-		barberShop.Close()
+		<-time.After(shopsOpeningTime)
+		color.Cyan("Closing %s, no more client are allowed", shop.name)
+		shopIsClosingChan <- true
+		shop.Close()
+		shopClosedChan <- true
 	}()
 
-	for _, b := range barberShop.barbers {
-		go barberWork(&b, barberShop.ch, &wg)
+	for i := 0; i < numberOfBarbers; i++ {
+		shop.AddBarber(pickRandomName())
 	}
 
-	for {
-		time.Sleep(1 * time.Second)
-		if barberShop.IsClose() {
-			break
+	go func() {
+		for {
+			delay := rand.Intn(500) + 100
+
+			select {
+			case <-shopIsClosingChan:
+				return
+			case <-time.After(time.Duration(delay) * time.Millisecond):
+				shop.NewClient(pickRandomName())
+			}
+
 		}
+	}()
 
-		client := Client{
-			name: pickRandomName(),
-		}
-		fmt.Println("\t New client", client.name)
-
-		wg.Add(1)
-		barberShop.ch <- client
-	}
-
-	wg.Wait()
-}
-
-func initBarberShop() BarberShop {
-	var barbers []Barber
-
-	for i := 0; i < NUMBER_OF_BARBERS; i++ {
-		barbers = append(barbers, Barber{
-			name: pickRandomName(),
-		})
-	}
-
-	return BarberShop{
-		name:    "The Super Barber Shop",
-		isOpen:  true,
-		barbers: barbers,
-		ch:      make(chan Client, WAITING_ROOM_SIZE-1),
-		mu:      &sync.Mutex{},
-	}
+	<-shopClosedChan
+	color.Cyan("%s is closed", shop.name)
 }
 
 func pickRandomName() string {
